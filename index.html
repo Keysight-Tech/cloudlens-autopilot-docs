@@ -404,7 +404,7 @@ done</code></pre>
           <form class="wizard" id="wizard-form" autocomplete="off">
             <div class="step" data-step="1">
               <div class="step-head"><span class="step-num">1</span><h3>CloudLens Manager</h3></div>
-              <label for="clms-ip">CLMS IP or FQDN</label>
+              <label for="clms-ip">CLMS public IP (post-deploy)</label>
               <input id="clms-ip" name="clms_ip" type="text" placeholder="10.0.0.10 or clms.example.com" value="10.0.0.10" required />
               <details class="field-help">
                 <summary>Where do I find this?</summary>
@@ -413,7 +413,7 @@ done</code></pre>
             </div>
             <div class="step" data-step="2">
               <div class="step-head"><span class="step-num">2</span><h3>Project key</h3></div>
-              <label for="project-key">CLMS project API key</label>
+              <label for="project-key">CLMS project key (Phase 2 ref)</label>
               <div class="input-row">
                 <input id="project-key" name="project_key" type="password" placeholder="paste from CLMS UI" value="" required />
                 <button type="button" class="icon-btn small" id="toggle-key" aria-label="Show or hide key" title="Show or hide key">
@@ -427,8 +427,8 @@ done</code></pre>
             </div>
             <div class="step" data-step="3">
               <div class="step-head"><span class="step-num">3</span><h3>Custom tags</h3></div>
-              <label for="tags">Tags applied to sensors</label>
-              <input id="tags" name="tags" type="text" placeholder="Env=AWS,Region=us-east-1" value="Env=AWS" />
+              <label for="tags">Resource tags (key=value, comma-separated)</label>
+              <input id="tags" name="tags" type="text" placeholder="Env=AWS,Owner=cloudlens-se,Region=us-east-1" value="Env=AWS,Owner=cloudlens-se" />
               <details class="field-help">
                 <summary>What does this do?</summary>
                 <p>These tags are attached to each registered sensor and visible in CLMS. Use them to filter and group sensors (for example: Customer=Acme, Region=us-east-1).</p>
@@ -436,18 +436,17 @@ done</code></pre>
             </div>
             <div class="step" data-step="4">
               <div class="step-head"><span class="step-num">4</span><h3>Resource groups</h3></div>
-              <label for="rgs">Comma separated VPCs (leave blank for subscription wide)</label>
-              <input id="rgs" name="resource_groups" type="text" placeholder="rg-prod-us-east-1, rg-prod-us-west-2" value="" />
+              <label for="rgs">Allowed source CIDRs for SSH/Web (comma-separated)</label>
+              <input id="rgs" name="resource_groups" type="text" placeholder="203.0.113.5/32, 198.51.100.0/24" value="0.0.0.0/0" />
               <details class="field-help">
                 <summary>What if I leave this blank?</summary>
                 <p>Blank means scan ALL VPCs in your subscription for tagged VMs. List specific RGs (comma-separated) to limit discovery.</p>
               </details>
               <div class="connection-mode">
-                <label for="mode">Connection mode</label>
+                <label for="mode">Deployment mode</label>
                 <select id="mode" name="mode">
-                  <option value="direct_public">direct_public</option>
-                  <option value="jumpbox">jumpbox</option>
-                  <option value="bastion">bastion</option>
+                  <option value="greenfield">greenfield — new VPC (CFT or Terraform)</option>
+                  <option value="existing-vpc">existing-vpc — brownfield (customer VPC)</option>
                 </select>
               </div>
             </div>
