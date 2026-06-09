@@ -1074,3 +1074,50 @@ section { padding: 110px 24px !important; }
   letter-spacing: -0.02em;
 }
 
+
+/* === BUG FIXES (post-E2E hunt) === */
+
+/* 1. Code blocks must not horizontal-overflow (pre + code) */
+pre, code:not(pre code) {
+  max-width: 100%;
+  overflow-x: auto;
+  word-break: break-word;
+  white-space: pre-wrap !important;
+}
+pre code, pre #yaml-preview, #yaml-preview {
+  white-space: pre !important;
+  overflow-x: auto;
+  display: block;
+}
+
+/* 2. Tables wrapped in a scrollable container, not overflow body */
+.step-table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* 3. Nav must not push beyond container */
+.site-header > * {
+  min-width: 0;
+}
+.nav-actions {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.primary-nav {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+@media (max-width: 1100px) {
+  .primary-nav a:nth-child(n+8) { display: none; }
+}
+
+/* 4. Prevent ANY block-level child from causing body overflow */
+html, body { overflow-x: hidden; }
+body { max-width: 100vw; }
+
+/* 5. Code inside tables wraps */
+table code { word-break: break-all; }
+

@@ -1,0 +1,1243 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudLens AutoPilot — One-Click Keysight Visibility Stack Deployment
+  Deploys KVO + CLMS + vPB with VPC networking, IAM, SSM documents,
+  and auto-mirror Lambda for automatic VPC Traffic Mirroring.
+  Keysight Technologies | v2.0
+
+# =============================================================================
+# METADATA — Controls AWS Console parameter grouping and ordering
+# =============================================================================
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Deployment Information
+        Parameters:
+          - DeploymentName
+          - OwnerTag
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcCidr
+          - MgmtSubnetCidr
+          - DataSubnetCidr
+          - ToolSubnetCidr
+          - AllowedSshCidrs
+          - AllowedWebCidrs
+      - Label:
+          default: Keysight Products
+        Parameters:
+          - DeployKVO
+          - DeployCLMS
+          - DeployVPB
+          - KvoInstanceType
+          - ClmsInstanceType
+          - VpbInstanceType
+          - KeyPairName
+      - Label:
+          default: Auto-Mirror (Traffic Mirroring Automation)
+        Parameters:
+          - EnableAutoMirror
+          - MirrorTagKey
+          - MirrorTagValue
+      - Label:
+          default: Sensor Deployment
+        Parameters:
+          - WindowsInstallerS3Bucket
+          - WindowsInstallerS3Key
+      - Label:
+          default: Lambda Code Location
+        Parameters:
+          - LambdaS3Bucket
+          - LambdaS3Key
+    ParameterLabels:
+      DeploymentName:
+        default: Deployment Name (used as resource prefix)
+      OwnerTag:
+        default: Owner (for cost tracking)
+      VpcCidr:
+        default: VPC CIDR Block
+      AllowedSshCidrs:
+        default: Your IP for SSH Access (x.x.x.x/32)
+      AllowedWebCidrs:
+        default: Your IP for Web UI Access (x.x.x.x/32)
+      DeployKVO:
+        default: Deploy KVO (Vision Orchestrator)
+      DeployCLMS:
+        default: Deploy CLMS (CloudLens Manager)
+      DeployVPB:
+        default: Deploy vPB (Virtual Packet Broker)
+      KeyPairName:
+        default: EC2 Key Pair Name
+      EnableAutoMirror:
+        default: Enable automatic VPC Traffic Mirroring for tagged instances
+      MirrorTagKey:
+        default: Tag key that triggers auto-mirroring
+      MirrorTagValue:
+        default: Tag value that triggers auto-mirroring
+
+# =============================================================================
+# PARAMETERS
+# =============================================================================
+Parameters:
+  DeploymentName:
+    Type: String
+    Default: demo
+    AllowedPattern: '[a-z0-9-]+'
+    Description: Lowercase prefix for all resources (e.g., demo, acme-poc)
+
+  OwnerTag:
+    Type: String
+    Default: ''
+    Description: Owner name for cost tracking tags
+
+  # --- Network ---
+  VpcCidr:
+    Type: String
+    Default: '10.0.0.0/16'
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be a valid CIDR block (e.g., 10.0.0.0/16)
+
+  MgmtSubnetCidr:
+    Type: String
+    Default: '10.0.1.0/24'
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be a valid CIDR block (e.g., 10.0.1.0/24)
+
+  DataSubnetCidr:
+    Type: String
+    Default: '10.0.2.0/24'
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be a valid CIDR block
+
+  ToolSubnetCidr:
+    Type: String
+    Default: '10.0.3.0/24'
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be a valid CIDR block
+
+  AllowedSshCidrs:
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be a valid CIDR (e.g., 203.0.113.50/32). Do NOT use 0.0.0.0/0 in production.
+    Description: Your IP for SSH access (REQUIRED - use x.x.x.x/32 format)
+
+  AllowedWebCidrs:
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be a valid CIDR (e.g., 203.0.113.50/32). Do NOT use 0.0.0.0/0 in production.
+    Description: Your IP for Web UI access (REQUIRED - use x.x.x.x/32 format)
+
+  # --- Products ---
+  DeployKVO:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  DeployCLMS:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  DeployVPB:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  KvoInstanceType:
+    Type: String
+    Default: c5.2xlarge
+    AllowedValues: [c5.2xlarge]
+    Description: Marketplace-restricted to c5.2xlarge
+
+  ClmsInstanceType:
+    Type: String
+    Default: t3.xlarge
+    AllowedValues: [t3.xlarge, t3.2xlarge, m5.xlarge]
+
+  VpbInstanceType:
+    Type: String
+    Default: t3.xlarge
+    AllowedValues: [t3.xlarge]
+    Description: Marketplace-restricted to t3.xlarge
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access
+
+  # --- Auto-Mirror ---
+  EnableAutoMirror:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  MirrorTagKey:
+    Type: String
+    Default: cloudlens-mirror
+    Description: EC2 tag key that triggers automatic traffic mirroring
+
+  MirrorTagValue:
+    Type: String
+    Default: 'true'
+    Description: EC2 tag value that triggers automatic traffic mirroring
+
+  # --- Sensor ---
+  WindowsInstallerS3Bucket:
+    Type: String
+    Default: ''
+    Description: S3 bucket containing Windows sensor .EXE (optional)
+
+  WindowsInstallerS3Key:
+    Type: String
+    Default: cloudlens-win-sensor-6.12.0.316.exe
+    Description: S3 key for Windows sensor installer
+
+  LambdaS3Bucket:
+    Type: String
+    Default: cloudlens-autopilot-artifacts
+    Description: S3 bucket containing auto-mirror Lambda ZIP
+
+  LambdaS3Key:
+    Type: String
+    Default: auto-mirror-lambda.zip
+    Description: S3 key for auto-mirror Lambda ZIP package
+
+# =============================================================================
+# MAPPINGS — Marketplace AMI IDs per region
+# =============================================================================
+Mappings:
+  KvoAmis:
+    us-east-1:
+      AMI: ami-017c0db8981569380
+    us-east-2:
+      AMI: ami-0c64cb70a5f108bd8
+    us-west-1:
+      AMI: ami-05476bf4f555bccbe
+    us-west-2:
+      AMI: ami-0f399d9aa7b84ec2e
+    eu-west-1:
+      AMI: ami-0ef80d99e9c38e09c
+    eu-west-2:
+      AMI: ami-04e26ecf754f1c529
+    eu-central-1:
+      AMI: ami-088f3f8ff5de8aec4
+    ap-southeast-1:
+      AMI: ami-0a04f2c31eb3c23f1
+    ap-southeast-2:
+      AMI: ami-0b3bb46c3e3bde2fe
+    ap-northeast-1:
+      AMI: ami-02c6f02ba3a3b62be
+    ca-central-1:
+      AMI: ami-0daeae26d7de80ce2
+    sa-east-1:
+      AMI: ami-01a9d94c8f339ba5e
+
+  ClmsAmis:
+    us-east-1:
+      AMI: ami-0bebd5e730315337e
+    us-east-2:
+      AMI: ami-0f3eb1b3c6b1e7fc0
+    us-west-1:
+      AMI: ami-08a91aab5b0d3150d
+    us-west-2:
+      AMI: ami-0e6ee6f0cf8deef0a
+    eu-west-1:
+      AMI: ami-0f7f51de1e5e42e70
+    eu-west-2:
+      AMI: ami-071e29bcf3d51aa90
+    eu-central-1:
+      AMI: ami-0cf2ec82f0b29302e
+    ap-southeast-1:
+      AMI: ami-07e3b8eaa8e2fe2be
+    ap-southeast-2:
+      AMI: ami-0c9f90ded29a39a05
+    ap-northeast-1:
+      AMI: ami-0b501f9af2fff3bfa
+    ca-central-1:
+      AMI: ami-02dfa4bfc4dffd2a3
+    sa-east-1:
+      AMI: ami-095dd12f22d44e6b9
+
+  VpbAmis:
+    us-east-1:
+      AMI: ami-0a561b450552b707d
+    us-east-2:
+      AMI: ami-00c2ff57eff4c97ac
+    us-west-1:
+      AMI: ami-0e2b1ee57e1979937
+    us-west-2:
+      AMI: ami-086f68c54d0e38f66
+    eu-west-1:
+      AMI: ami-0b3b7e5e34dbf9bb0
+    eu-west-2:
+      AMI: ami-094e2ad2c6a200ec3
+    eu-central-1:
+      AMI: ami-0e000e47b5cdc0b2f
+    ap-southeast-1:
+      AMI: ami-08f1e9a09d9da2fb3
+    ap-southeast-2:
+      AMI: ami-097b94d6aec94a5b1
+    ap-northeast-1:
+      AMI: ami-0218c2f9ddd18f90d
+    ca-central-1:
+      AMI: ami-06ac1b99b68d27dcc
+    sa-east-1:
+      AMI: ami-0b1cd9e4a89b61ba3
+
+# =============================================================================
+# CONDITIONS
+# =============================================================================
+Conditions:
+  CreateKVO: !Equals [!Ref DeployKVO, 'true']
+  CreateCLMS: !Equals [!Ref DeployCLMS, 'true']
+  CreateVPB: !Equals [!Ref DeployVPB, 'true']
+  CreateAutoMirror: !Equals [!Ref EnableAutoMirror, 'true']
+  HasWindowsInstaller: !Not [!Equals [!Ref WindowsInstallerS3Bucket, '']]
+
+# =============================================================================
+# RESOURCES
+# =============================================================================
+Resources:
+
+  # =========================================================================
+  # VPC + NETWORKING
+  # =========================================================================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-autopilot-vpc'
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: ManagedBy
+          Value: cloudlens-autopilot
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-igw'
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # --- Subnets ---
+  MgmtSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref MgmtSubnetCidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-mgmt'
+
+  DataSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref DataSubnetCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-data'
+
+  ToolSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref ToolSubnetCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-tool'
+
+  # --- Route Tables ---
+  MgmtRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-mgmt-rt'
+
+  MgmtRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref MgmtRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  MgmtSubnetRTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MgmtSubnet
+      RouteTableId: !Ref MgmtRouteTable
+
+  DataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-data-rt'
+
+  DataRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref DataRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  DataSubnetRTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DataSubnet
+      RouteTableId: !Ref DataRouteTable
+
+  ToolRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-tool-rt'
+
+  ToolRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref ToolRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  ToolSubnetRTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ToolSubnet
+      RouteTableId: !Ref ToolRouteTable
+
+  # =========================================================================
+  # SECURITY GROUPS
+  # =========================================================================
+  KeysightMgmtSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Management access for Keysight products
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidrs
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedWebCidrs
+          Description: HTTPS
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+          Description: VPC internal traffic
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-keysight-mgmt'
+
+  KvoSG:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateKVO
+    Properties:
+      GroupDescription: KVO web UI access
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidrs
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedWebCidrs
+          Description: HTTP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedWebCidrs
+          Description: HTTPS
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+          Description: VPC internal traffic
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-kvo'
+
+  CollectorIngressSG:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateVPB
+    Properties:
+      GroupDescription: Collector ingress — receives mirrored traffic from source VMs
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: udp
+          FromPort: 4789
+          ToPort: 4789
+          CidrIp: !Ref VpcCidr
+          Description: VXLAN from source VMs
+        - IpProtocol: '47'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: !Ref VpcCidr
+          Description: GRE from source VMs
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+          Description: All VPC internal communication
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+          Description: Forward to collector processing
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-collector-ingress'
+
+  CollectorEgressSG:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateVPB
+    Properties:
+      GroupDescription: Collector egress — sends processed traffic to tools
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+          Description: From collector processing
+      SecurityGroupEgress:
+        - IpProtocol: udp
+          FromPort: 4789
+          ToPort: 4789
+          CidrIp: !Ref VpcCidr
+          Description: VXLAN to tool destinations
+        - IpProtocol: '47'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: !Ref VpcCidr
+          Description: GRE to tool destinations
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+          Description: Reach external tools
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-collector-egress'
+
+  # =========================================================================
+  # ELASTIC IPs
+  # =========================================================================
+  KvoEIP:
+    Type: AWS::EC2::EIP
+    Condition: CreateKVO
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-kvo-eip'
+
+  ClmsEIP:
+    Type: AWS::EC2::EIP
+    Condition: CreateCLMS
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-clms-eip'
+
+  VpbEIP:
+    Type: AWS::EC2::EIP
+    Condition: CreateVPB
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-vpb-eip'
+
+  # =========================================================================
+  # KVO INSTANCE
+  # =========================================================================
+  KvoInstance:
+    Type: AWS::EC2::Instance
+    Condition: CreateKVO
+    Properties:
+      ImageId: !FindInMap [KvoAmis, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref KvoInstanceType
+      SubnetId: !Ref MgmtSubnet
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !Ref KvoSG
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 200
+            VolumeType: gp3
+            Iops: 3000
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-kvo'
+        - Key: Role
+          Value: kvo
+
+  KvoEIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Condition: CreateKVO
+    Properties:
+      AllocationId: !GetAtt KvoEIP.AllocationId
+      InstanceId: !Ref KvoInstance
+
+  # =========================================================================
+  # CLMS INSTANCE
+  # =========================================================================
+  ClmsInstance:
+    Type: AWS::EC2::Instance
+    Condition: CreateCLMS
+    Properties:
+      ImageId: !FindInMap [ClmsAmis, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref ClmsInstanceType
+      SubnetId: !Ref MgmtSubnet
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !Ref KeysightMgmtSG
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 200
+            VolumeType: gp3
+            Iops: 3000
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-clms'
+        - Key: Role
+          Value: clms
+
+  ClmsEIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Condition: CreateCLMS
+    Properties:
+      AllocationId: !GetAtt ClmsEIP.AllocationId
+      InstanceId: !Ref ClmsInstance
+
+  # =========================================================================
+  # vPB INSTANCE (3-ENI architecture)
+  # =========================================================================
+  VpbMgmtENI:
+    Type: AWS::EC2::NetworkInterface
+    Condition: CreateVPB
+    Properties:
+      SubnetId: !Ref MgmtSubnet
+      GroupSet:
+        - !Ref KeysightMgmtSG
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-vpb-mgmt'
+
+  VpbIngressENI:
+    Type: AWS::EC2::NetworkInterface
+    Condition: CreateVPB
+    Properties:
+      SubnetId: !Ref DataSubnet
+      GroupSet:
+        - !Ref CollectorIngressSG
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-vpb-ingress'
+
+  VpbEgressENI:
+    Type: AWS::EC2::NetworkInterface
+    Condition: CreateVPB
+    Properties:
+      SubnetId: !Ref ToolSubnet
+      GroupSet:
+        - !Ref CollectorEgressSG
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-vpb-egress'
+
+  VpbInstance:
+    Type: AWS::EC2::Instance
+    Condition: CreateVPB
+    Properties:
+      ImageId: !FindInMap [VpbAmis, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref VpbInstanceType
+      KeyName: !Ref KeyPairName
+      NetworkInterfaces:
+        - NetworkInterfaceId: !Ref VpbMgmtENI
+          DeviceIndex: 0
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-vpb'
+        - Key: Role
+          Value: vpb
+
+  VpbIngressAttach:
+    Type: AWS::EC2::NetworkInterfaceAttachment
+    Condition: CreateVPB
+    Properties:
+      InstanceId: !Ref VpbInstance
+      NetworkInterfaceId: !Ref VpbIngressENI
+      DeviceIndex: 1
+
+  VpbEgressAttach:
+    Type: AWS::EC2::NetworkInterfaceAttachment
+    Condition: CreateVPB
+    Properties:
+      InstanceId: !Ref VpbInstance
+      NetworkInterfaceId: !Ref VpbEgressENI
+      DeviceIndex: 2
+
+  VpbEIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Condition: CreateVPB
+    Properties:
+      AllocationId: !GetAtt VpbEIP.AllocationId
+      NetworkInterfaceId: !Ref VpbMgmtENI
+
+  # =========================================================================
+  # IAM — CloudConfig Agent
+  # =========================================================================
+  CloudConfigUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${DeploymentName}-cloudconfig-agent'
+      Path: /autopilot/
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-cloudconfig-agent'
+
+  # Official CloudLens IAM policy — matches Keysight CloudLens v6.13.0 docs.
+  # Uses resource tags (cloudlens:monitored:vpcid) to scope destructive
+  # operations and deny untagged resource creation.
+  CloudConfigPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${DeploymentName}-cloudconfig-policy'
+      Users:
+        - !Ref CloudConfigUser
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # --- Read/Describe permissions (Resource: "*") ---
+          - Sid: CloudLensReadDescribe
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstanceTypes
+              - ec2:DescribeKeyPairs
+              - ec2:DescribeVpcs
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSubnets
+              - account:ListRegions
+              - ec2:DescribeInstances
+              - ec2:DescribeTrafficMirrorSessions
+              - ec2:DescribeTrafficMirrorTargets
+              - ec2:DescribeTrafficMirrorFilters
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribeLaunchTemplateVersions
+              - ec2:DescribeNetworkInterfaces
+              - autoscaling:DescribeAutoScalingGroups
+              - autoscaling:DescribeScalingActivities
+            Resource: '*'
+          # --- Modify permissions (scoped by cloudlens:monitored:vpcid tag) ---
+          - Sid: CloudLensModifyTagged
+            Effect: Allow
+            Action:
+              - ec2:TerminateInstances
+              - ec2:DeleteLaunchTemplate
+              - ec2:DeleteLaunchTemplateVersions
+              - ec2:DeleteTrafficMirrorFilter
+              - ec2:DeleteTrafficMirrorTarget
+              - ec2:DeleteTrafficMirrorSession
+              - ec2:DeleteNetworkInterface
+              - ec2:AttachNetworkInterface
+              - ec2:ModifyLaunchTemplate
+              - ec2:CreateLaunchTemplateVersion
+              - autoscaling:DeleteTags
+              - autoscaling:DeleteAutoScalingGroup
+              - autoscaling:CreateOrUpdateTags
+              - autoscaling:UpdateAutoScalingGroup
+              - autoscaling:SetDesiredCapacity
+              - autoscaling:StartInstanceRefresh
+            Resource: '*'
+            Condition:
+              StringLike:
+                'aws:ResourceTag/cloudlens:monitored:vpcid': '*'
+          # --- Create permissions (require cloudlens tag on request) ---
+          - Sid: CloudLensCreateTagged
+            Effect: Allow
+            Action:
+              - ec2:CreateTrafficMirrorFilter
+              - ec2:CreateLaunchTemplate
+              - autoscaling:CreateAutoScalingGroup
+            Resource: '*'
+            Condition:
+              StringLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+          # --- CreateTags with CreateAction conditions ---
+          - Sid: CloudLensCreateTags
+            Effect: Allow
+            Action:
+              - ec2:CreateTags
+            Resource: '*'
+            Condition:
+              StringLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+              StringEquals:
+                'ec2:CreateAction':
+                  - CreateTrafficMirrorFilterRule
+                  - CreateTrafficMirrorFilter
+                  - CreateTrafficMirrorSession
+                  - CreateTrafficMirrorTarget
+                  - CreateNetworkInterface
+                  - CreateLaunchTemplate
+                  - RunInstances
+          # --- Unrestricted create permissions (Resource: "*") ---
+          - Sid: CloudLensUnrestrictedCreate
+            Effect: Allow
+            Action:
+              - ec2:CreateTrafficMirrorFilterRule
+              - ec2:CreateTrafficMirrorTarget
+              - ec2:CreateTrafficMirrorSession
+              - ec2:CreateNetworkInterface
+              - ec2:RunInstances
+              - ec2:ModifyNetworkInterfaceAttribute
+            Resource: '*'
+          # --- Deny untagged resource creation ---
+          - Sid: DenyUntaggedTrafficMirrorFilterRule
+            Effect: Deny
+            Action:
+              - ec2:CreateTrafficMirrorFilterRule
+            Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:traffic-mirror-filter-rule/*'
+            Condition:
+              StringNotLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+          - Sid: DenyUntaggedTrafficMirrorTarget
+            Effect: Deny
+            Action:
+              - ec2:CreateTrafficMirrorTarget
+            Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:traffic-mirror-target/*'
+            Condition:
+              StringNotLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+          - Sid: DenyUntaggedTrafficMirrorSession
+            Effect: Deny
+            Action:
+              - ec2:CreateTrafficMirrorSession
+            Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:traffic-mirror-session/*'
+            Condition:
+              StringNotLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+          - Sid: DenyUntaggedNetworkInterface
+            Effect: Deny
+            Action:
+              - ec2:CreateNetworkInterface
+            Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:network-interface/*'
+            Condition:
+              StringNotLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+          - Sid: DenyUntaggedRunInstances
+            Effect: Deny
+            Action:
+              - ec2:RunInstances
+            Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:instance/*'
+            Condition:
+              StringNotLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+          - Sid: DenyUntaggedModifyNetworkInterface
+            Effect: Deny
+            Action:
+              - ec2:ModifyNetworkInterfaceAttribute
+            Resource:
+              - !Sub 'arn:aws:ec2:*:${AWS::AccountId}:network-interface/*'
+              - !Sub 'arn:aws:ec2:*:${AWS::AccountId}:instance/*'
+            Condition:
+              StringNotLike:
+                'aws:RequestTag/cloudlens:monitored:vpcid': '*'
+
+  CloudConfigAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref CloudConfigUser
+
+  # =========================================================================
+  # AUTO-MIRROR — Lambda + EventBridge (ATS Equivalent)
+  # =========================================================================
+  AutoMirrorRole:
+    Type: AWS::IAM::Role
+    Condition: CreateAutoMirror
+    Properties:
+      RoleName: !Sub '${DeploymentName}-auto-mirror-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: auto-mirror-ec2
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeTags
+                  - ec2:CreateTrafficMirrorTarget
+                  - ec2:CreateTrafficMirrorFilter
+                  - ec2:CreateTrafficMirrorFilterRule
+                  - ec2:CreateTrafficMirrorSession
+                  - ec2:DescribeTrafficMirrorTargets
+                  - ec2:DescribeTrafficMirrorFilters
+                  - ec2:DescribeTrafficMirrorSessions
+                  - ec2:DeleteTrafficMirrorSession
+                  - ec2:DeleteTrafficMirrorTarget
+                  - ec2:DeleteTrafficMirrorFilter
+                  - ec2:CreateTags
+                Resource: '*'
+
+  AutoMirrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: CreateAutoMirror
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${DeploymentName}-auto-mirror'
+      RetentionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-auto-mirror-logs'
+
+  AutoMirrorFunction:
+    Type: AWS::Lambda::Function
+    Condition: CreateAutoMirror
+    DependsOn: AutoMirrorLogGroup
+    Properties:
+      FunctionName: !Sub '${DeploymentName}-auto-mirror'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      MemorySize: 256
+      Role: !GetAtt AutoMirrorRole.Arn
+      Environment:
+        Variables:
+          VPB_INGRESS_ENI: !If [CreateVPB, !Ref VpbIngressENI, '']
+          MIRROR_TAG_KEY: !Ref MirrorTagKey
+          MIRROR_TAG_VALUE: !Ref MirrorTagValue
+          DEPLOYMENT_NAME: !Ref DeploymentName
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LambdaS3Key
+      Tags:
+        - Key: Name
+          Value: !Sub '${DeploymentName}-auto-mirror'
+      # NOTE: The Lambda code is in lambda/auto-mirror/index.py
+      # Package and upload: cd lambda/auto-mirror && zip ../auto-mirror-lambda.zip index.py
+      # Upload: aws s3 cp lambda/auto-mirror-lambda.zip s3://<bucket>/auto-mirror-lambda.zip
+  # --- EventBridge Rule: EC2 Instance Running → Create Mirror ---
+  AutoMirrorRuleRunning:
+    Type: AWS::Events::Rule
+    Condition: CreateAutoMirror
+    Properties:
+      Name: !Sub '${DeploymentName}-auto-mirror-instance-running'
+      Description: Trigger auto-mirror when EC2 instance enters running state
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance State-change Notification
+        detail:
+          state:
+            - running
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AutoMirrorFunction.Arn
+          Id: auto-mirror-lambda
+
+  # --- EventBridge Rule: Tag Created ---
+  AutoMirrorRuleTagged:
+    Type: AWS::Events::Rule
+    Condition: CreateAutoMirror
+    Properties:
+      Name: !Sub '${DeploymentName}-auto-mirror-tag-created'
+      Description: Trigger auto-mirror when EC2 instance is tagged
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - ec2.amazonaws.com
+          eventName:
+            - CreateTags
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AutoMirrorFunction.Arn
+          Id: auto-mirror-lambda-tag
+
+  AutoMirrorPermRunning:
+    Type: AWS::Lambda::Permission
+    Condition: CreateAutoMirror
+    Properties:
+      FunctionName: !Ref AutoMirrorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AutoMirrorRuleRunning.Arn
+
+  AutoMirrorPermTagged:
+    Type: AWS::Lambda::Permission
+    Condition: CreateAutoMirror
+    Properties:
+      FunctionName: !Ref AutoMirrorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AutoMirrorRuleTagged.Arn
+
+  # --- EventBridge Rule: EC2 Instance Terminated → Cleanup Mirror ---
+  AutoMirrorRuleTerminated:
+    Type: AWS::Events::Rule
+    Condition: CreateAutoMirror
+    Properties:
+      Name: !Sub '${DeploymentName}-auto-mirror-instance-terminated'
+      Description: Cleanup mirror sessions when EC2 instance terminates
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance State-change Notification
+        detail:
+          state:
+            - shutting-down
+            - terminated
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AutoMirrorFunction.Arn
+          Id: auto-mirror-lambda-cleanup
+
+  AutoMirrorPermTerminated:
+    Type: AWS::Lambda::Permission
+    Condition: CreateAutoMirror
+    Properties:
+      FunctionName: !Ref AutoMirrorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AutoMirrorRuleTerminated.Arn
+
+  # =========================================================================
+  # SSM DOCUMENTS — Sensor Deployment
+  # =========================================================================
+  DeployDockerSSM:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub '${DeploymentName}-Deploy-CloudLens-Docker'
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: Deploy CloudLens sensor via Docker on Ubuntu/Debian
+        parameters:
+          ClmsIp:
+            type: String
+            description: CLMS IP address
+          ProjectKey:
+            type: String
+            description: CLMS project key
+          CustomTags:
+            type: String
+            default: deployed-by=autopilot
+        mainSteps:
+          - action: aws:runShellScript
+            name: DeploySensor
+            inputs:
+              runCommand:
+                - '#!/bin/bash'
+                - 'set -e'
+                - 'if ! command -v docker &>/dev/null; then apt-get update -y && apt-get install -y docker.io && systemctl enable docker && systemctl start docker; fi'
+                - 'docker rm -f cloudlens-agent 2>/dev/null || true'
+                - 'docker run -d -v /lib/modules:/lib/modules -v /var/log/cloudlens:/var/log/cloudlens -v /:/host -v /var/run/docker.sock:/var/run/docker.sock --cap-add NET_BROADCAST --cap-add SYS_ADMIN --cap-add SYS_MODULE --cap-add SYS_RESOURCE --cap-add NET_RAW --cap-add NET_ADMIN --name cloudlens-agent --restart=always --net=host --log-opt max-size=50m --log-opt max-file=5 {{ ClmsIp }}/sensor --accept_eula yes --project_key {{ ProjectKey }} --server {{ ClmsIp }} --custom_tags "{{ CustomTags }}" --ssl_verify no'
+                - 'sleep 5 && docker ps -f name=cloudlens-agent --format "{{.Names}}" | grep -q cloudlens-agent && echo "CloudLens sensor deployed" || exit 1'
+
+  DeployPodmanSSM:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub '${DeploymentName}-Deploy-CloudLens-Podman'
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: Deploy CloudLens sensor via Podman on RHEL/CentOS
+        parameters:
+          ClmsIp:
+            type: String
+            description: CLMS IP address
+          ProjectKey:
+            type: String
+            description: CLMS project key
+          CustomTags:
+            type: String
+            default: deployed-by=autopilot
+        mainSteps:
+          - action: aws:runShellScript
+            name: DeploySensor
+            inputs:
+              runCommand:
+                - '#!/bin/bash'
+                - 'set -e'
+                - 'mkdir -p /var/log/cloudlens /var/tmp/cloudtap'
+                - 'if ! command -v podman &>/dev/null; then dnf install -y podman 2>/dev/null || yum install -y podman; fi'
+                - 'mkdir -p /etc/containers/registries.conf.d && echo -e "[[registry]]\nlocation = \"{{ ClmsIp }}\"\ninsecure = true" > /etc/containers/registries.conf.d/cloudlens.conf'
+                - 'podman rm -f cloudlens-agent 2>/dev/null || true'
+                - 'podman pull --tls-verify=false {{ ClmsIp }}/sensor:latest'
+                - 'podman run -d -v /lib/modules:/lib/modules -v /var/log/cloudlens:/var/log/cloudlens -v /var/tmp/cloudtap:/var/cloudtap -v /:/host --cap-add NET_BROADCAST --cap-add SYS_ADMIN --cap-add SYS_MODULE --cap-add SYS_RESOURCE --cap-add NET_RAW --cap-add NET_ADMIN --security-opt label=disable --name cloudlens-agent --restart=always --net=host --log-opt max-size=50m --log-opt max-file=5 {{ ClmsIp }}/sensor:latest --accept_eula yes --loglevel debug --project_key {{ ProjectKey }} --server {{ ClmsIp }} --custom_tags "{{ CustomTags }}" --ssl_verify no'
+                - 'sleep 5 && podman inspect -f "{{.State.Status}}" cloudlens-agent | grep -q running && echo "CloudLens sensor deployed" || exit 1'
+
+  DeployWindowsSSM:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub '${DeploymentName}-Deploy-CloudLens-Windows'
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: Deploy CloudLens sensor on Windows Server
+        parameters:
+          ClmsIp:
+            type: String
+            description: CLMS IP address
+          ProjectKey:
+            type: String
+            description: CLMS project key
+          InstallerUrl:
+            type: String
+            default: ''
+            description: S3 URL for Windows installer
+          CustomTags:
+            type: String
+            default: deployed-by=autopilot
+        mainSteps:
+          - action: aws:runPowerShellScript
+            name: DeploySensor
+            inputs:
+              runCommand:
+                - '$ErrorActionPreference = "Stop"'
+                - 'New-Item -Path C:\temp -ItemType Directory -Force | Out-Null'
+                - '$installerPath = "C:\temp\cloudlens-sensor.exe"'
+                - 'if ("{{ InstallerUrl }}" -ne "") {'
+                - '  $url = "{{ InstallerUrl }}"'
+                - '  if ($url -match "s3.*amazonaws") {'
+                - '    $bucket = ($url -split "\.s3")[0] -replace "https://",""'
+                - '    $key = ($url -split "\.com/")[1]'
+                - '    Import-Module AWSPowerShell.NetCore -EA SilentlyContinue; Import-Module AWSPowerShell -EA SilentlyContinue'
+                - '    Read-S3Object -BucketName $bucket -Key $key -File $installerPath'
+                - '  } else { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri $url -OutFile $installerPath -UseBasicParsing }'
+                - '} else { Write-Output "ERROR: No InstallerUrl"; exit 1 }'
+                - 'Start-Process -FilePath $installerPath -ArgumentList "/install","/quiet","Server=`"{{ ClmsIp }}`"","Project_Key=`"{{ ProjectKey }}`"","SSL_Verify=`"no`"","Auto_Update=`"yes`"","Custom_Tags=`"{{ CustomTags }}`"" -Wait -NoNewWindow'
+                - 'Start-Sleep -Seconds 10'
+                - 'if (Get-Process -Name "CloudLensAgent_x64" -EA SilentlyContinue) { Write-Output "CloudLens sensor deployed" } else { Write-Output "ERROR: sensor not running"; exit 1 }'
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+Outputs:
+  KVOURL:
+    Condition: CreateKVO
+    Description: KVO Web UI
+    Value: !Sub 'https://${KvoEIP}'
+
+  CLMSURL:
+    Condition: CreateCLMS
+    Description: CLMS Web UI
+    Value: !Sub 'https://${ClmsEIP}'
+
+  VpbURL:
+    Condition: CreateVPB
+    Description: vPB Management
+    Value: !Sub 'https://${VpbEIP}'
+
+  KVOPrivateIP:
+    Condition: CreateKVO
+    Value: !GetAtt KvoInstance.PrivateIp
+
+  CLMSPrivateIP:
+    Condition: CreateCLMS
+    Value: !GetAtt ClmsInstance.PrivateIp
+
+  VpbPrivateIP:
+    Condition: CreateVPB
+    Value: !GetAtt VpbMgmtENI.PrimaryPrivateIpAddress
+
+  CollectorIngressSGId:
+    Condition: CreateVPB
+    Description: Security group for collector ingress (receives mirrored traffic)
+    Value: !Ref CollectorIngressSG
+
+  CollectorEgressSGId:
+    Condition: CreateVPB
+    Description: Security group for collector egress (sends to tools)
+    Value: !Ref CollectorEgressSG
+
+  VPCID:
+    Value: !Ref VPC
+
+  CloudConfigAccessKey:
+    Description: IAM access key for CloudConfig (use with terraform output for secret)
+    Value: !Ref CloudConfigAccessKey
+
+  CloudConfigSecretKey:
+    Description: IAM secret key for CloudConfig — SENSITIVE, change after initial setup
+    Value: !GetAtt CloudConfigAccessKey.SecretAccessKey
+    # NOTE: For AWS Marketplace submission, replace with Secrets Manager.
+    # Kept as output for SE demo convenience. Production deployments should
+    # rotate this key and use IAM roles instead of long-lived credentials.
+
+  DeploySensorsCommand:
+    Condition: CreateCLMS
+    Description: Run this command to deploy sensors after product configuration
+    Value: !Sub >
+      ./scripts/deploy-sensors.sh
+      --clms-ip ${ClmsInstance.PrivateIp}
+      --project-key <SENSOR_ACCESS_KEY>
+      --prefix ${DeploymentName}
+      --region ${AWS::Region}
+
+  AutoMirrorStatus:
+    Condition: CreateAutoMirror
+    Description: Auto-mirror is active. Tag instances with the configured tag to auto-create mirror sessions.
+    Value: !Sub 'Tag instances with ${MirrorTagKey}=${MirrorTagValue} to auto-mirror traffic to vPB'
+
+  DeploymentFormURL:
+    Description: Online deployment configuration form
+    Value: https://cloudlens-autopilot-artifacts.s3.amazonaws.com/deployment-form.html
