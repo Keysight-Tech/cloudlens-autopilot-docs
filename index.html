@@ -161,45 +161,75 @@ terraform init &amp;&amp; terraform apply</code></pre>
     <!-- 1.25 PREREQUISITE DEPLOYS: CLMS + vPB MARKETPLACE -->
     <section id="prereq-deploys" class="prereq-section">
       <div class="container">
-        <h2>Don't have CLMS or vPB yet?</h2>
-        <p class="lede">Deploy them from AWS Marketplace in one click before running sensor deployments.</p>
+        <header class="section-head">
+          <h2>AWS Marketplace prerequisites</h2>
+          <p class="lede">CloudLens AutoPilot deploys three Keysight products from AWS Marketplace. Subscribe to all three <strong>once per AWS account</strong> before running the CloudFormation or Terraform stack &mdash; this is a one-time EULA step that cannot be automated.</p>
+        </header>
 
-        <div class="prereq-cards">
-          <div class="prereq-card">
-            <h3>CloudLens Manager (CLMS)</h3>
-            <p>Central management for sensors. Required for any sensor deployment.</p>
+        <div class="prereq-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;">
+
+          <div class="prereq-card card">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+              <span style="display:inline-block;padding:4px 10px;background:linear-gradient(135deg,#E90029,#FB3D5E);color:white;border-radius:999px;font-size:0.7rem;font-weight:800;letter-spacing:0.08em;">CORE &middot; REQUIRED</span>
+            </div>
+            <h3>Keysight Vision One (KVO)</h3>
+            <p>Master orchestrator. Analytics, CloudConfig pipeline, AWS VPC Traffic Mirroring automation, monitoring policies. The brain of the AutoPilot stack.</p>
             <ul>
-              <li>Version 6.13.076 from AWS Marketplace</li>
-              <li>One VM, public IP, ready in 15 minutes</li>
-              <li>Default UI: admin / Cl0udLens@dm!n</li>
+              <li>AMI <code>ami-017c0db8981569380</code> from AWS Marketplace</li>
+              <li><strong>Instance type:</strong> <code>c5.2xlarge</code> only (Marketplace restriction)</li>
+              <li>Three licenses activated on first login: vPB Advanced, CloudLens Enterprise, KVO perpetual</li>
+              <li>Default UI: <code>admin / admin</code> (change on first login)</li>
+              <li>EULA accept in browser is mandatory before API access</li>
             </ul>
-            <a class="btn btn-primary" href="https://aws.amazon.com/marketplace/pp/prodview-clms-vcontroller" target="_blank" rel="noopener">&#9654; Deploy CLMS</a>
+            <a class="btn btn-primary" href="https://aws.amazon.com/marketplace/pp/prodview-keysight-vision-one" target="_blank" rel="noopener">&#9654; Subscribe to KVO</a>
           </div>
-          <div class="prereq-card">
-            <h3>Virtual Packet Broker (vPB)</h3>
-            <p>Optional. For inline traffic processing and VXLAN aggregation.</p>
+
+          <div class="prereq-card card">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+              <span style="display:inline-block;padding:4px 10px;background:linear-gradient(135deg,#FF9900,#FFAA33);color:#232F3E;border-radius:999px;font-size:0.7rem;font-weight:800;letter-spacing:0.08em;">SENSOR PLANE &middot; REQUIRED</span>
+            </div>
+            <h3>CloudLens Manager (CLMS / vController)</h3>
+            <p>Central management for sensors. Adopted into KVO as the sensor control plane. Required for any sensor deployment.</p>
             <ul>
-              <li>Version 3.15.01 from AWS Marketplace</li>
-              <li>Three-NIC layout with accelerated networking</li>
-              <li>CLI access via two-hop SSH</li>
+              <li>AMI <code>ami-0bebd5e730315337e</code> from AWS Marketplace</li>
+              <li><strong>Instance type:</strong> <code>t3.xlarge</code> (recommended)</li>
+              <li>Adopted by KVO from <strong>Inventory &rsaquo; CloudLens Manager &rsaquo; Discover</strong></li>
+              <li>Default UI: <code>admin / Cl0udLens@dm!n</code></li>
             </ul>
-            <a class="btn btn-secondary" href="https://aws.amazon.com/marketplace/pp/prodview-virtual-packet-broker" target="_blank" rel="noopener">&#9654; Deploy vPB</a>
+            <a class="btn btn-secondary" href="https://aws.amazon.com/marketplace/pp/prodview-clms-vcontroller" target="_blank" rel="noopener">&#9654; Subscribe to CLMS</a>
           </div>
+
+          <div class="prereq-card card">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+              <span style="display:inline-block;padding:4px 10px;background:linear-gradient(135deg,#475569,#64748B);color:white;border-radius:999px;font-size:0.7rem;font-weight:800;letter-spacing:0.08em;">DATA PLANE &middot; OPTIONAL</span>
+            </div>
+            <h3>Virtual Packet Broker (vPB-KVO)</h3>
+            <p>Traffic filtering, deduplication, and load balancing for the collector tier. SSL-Payload decapsulation and GREoUDP termination.</p>
+            <ul>
+              <li>AMI <code>ami-0a561b450552b707d</code> from AWS Marketplace</li>
+              <li><strong>Instance type:</strong> <code>t3.xlarge</code> only (Marketplace restriction)</li>
+              <li><strong>SSH on port <code>9022</code> &mdash; NOT 22</strong></li>
+              <li>CLI onboarding: <code>kvo &rsaquo; ip &lt;kvo&gt; &rsaquo; port 443 &rsaquo; enable</code></li>
+              <li>Default: <code>admin / ixia</code></li>
+            </ul>
+            <a class="btn btn-secondary" href="https://aws.amazon.com/marketplace/pp/prodview-virtual-packet-broker" target="_blank" rel="noopener">&#9654; Subscribe to vPB</a>
+          </div>
+
         </div>
 
-        <aside class="marketplace-note" aria-label="Marketplace listing names">
-          <p>In the AWS Console, the CLMS offer appears as <strong>"CloudLens Manager (Preview)"</strong> and the vPB offer appears as <strong>"CloudLens Virtual Packet Broker"</strong>. The Deploy buttons above point to the correct offer IDs automatically.</p>
-        </aside>
+        <div class="callout-warning" style="margin-top:32px;">
+          <strong>One-time EULA step:</strong> AWS Marketplace EULAs must be accepted <strong>once per Marketplace product per AWS account</strong> via the AWS Marketplace console. This <em>cannot</em> be automated by CloudFormation or Terraform. Click each <strong>Subscribe</strong> button above, accept the terms, and you're set for all future AutoPilot deployments in that account.
+        </div>
 
-        <p class="callout">After CLMS finishes initializing (about 15 minutes), open the UI, create a project, copy the project key, then return here to run the sensor deployment.</p>
-        <p class="prereq-note">First-time use of these images requires accepting Marketplace terms. The Portal will prompt you on first deploy, or run <code>az vm image terms accept --publisher keysight-technologies-cloudlens --offer &lt;offer&gt; --plan &lt;plan&gt;</code>.</p>
-
-        <details class="terraform-note">
-          <summary>Prefer Terraform?</summary>
-          <p>Both CLMS and vPB are also available as Terraform modules in <code>deploy/terraform/</code>. Same marketplace images, IaC-friendly for pipelines and repeatable deployments.</p>
-          <pre><code>cd deploy/terraform/clms
-cp terraform.tfvars.example terraform.tfvars
-terraform init &amp;&amp; terraform apply</code></pre>
+        <details class="card" style="margin-top:24px;">
+          <summary style="cursor:pointer;font-weight:700;">Auto-deployed by AutoPilot: Collector SVM &amp; Auto-Mirror Lambda</summary>
+          <div style="padding-top:16px;">
+            <p>In addition to the 3 Marketplace products above, AutoPilot deploys two more components automatically (no Marketplace subscription needed):</p>
+            <ul>
+              <li><strong>Collector SVM (Service VM)</strong> &mdash; AMI <code>ami-0c22ade3667f8d35a</code> (v6.13.0), auto-deployed by KVO Zone Tapping when you create a Cloud Config. Acts as the AWS VPC Traffic Mirroring collector.</li>
+              <li><strong>Auto-Mirror Lambda</strong> &mdash; Python 3.12 function (<code>demo-auto-mirror</code>) + 3 EventBridge rules. Tags new EC2 instances with <code>cloudlens-mirror=true</code> in watched VPCs so KVO picks them up instantly &mdash; sub-second from launch to mirror session.</li>
+            </ul>
+          </div>
         </details>
       </div>
     </section>
