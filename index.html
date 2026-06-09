@@ -50,12 +50,12 @@
         <a href="#prereq-deploys">Marketplace</a>
         <a href="#start-here">Deploy</a>
         <a href="#configuration">Configure</a>
+        <a href="#prep-vms">Prep VMs</a>
         <a href="#sensors">Sensors</a>
         <a href="#mirroring">Mirroring</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#scaling">Scaling</a>
+        <a href="#teardown">Teardown</a>
+        <a href="#appendix">Appendix</a>
         <a href="#faq">Troubleshoot</a>
-        <a href="#docs">Docs</a>
       </nav>
       <div class="nav-actions">
         <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
@@ -589,8 +589,118 @@ write memory</code></pre>
       </div>
     </section>
 
+    <!-- SECTION 5: PREPARING EXISTING CUSTOMER VMs -->
+    <section id="prep-vms" class="section alt">
+      <div class="container">
+        <header class="section-head">
+          <h2>Preparing Existing Customer VMs</h2>
+          <p class="lede">Skip this if you used AutoPilot's <code>demo-targets</code> Terraform &mdash; those VMs are already configured. Deploying sensors to existing customer EC2 instances? Prep them with the included script in scan-then-fix mode.</p>
+        </header>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-bottom:40px;">
+          <article class="card">
+            <h3>🪪 IAM Role</h3>
+            <p><strong>Auto-fix:</strong> Yes</p>
+            <p>Each VM needs <code>AmazonSSMManagedInstanceCore</code> attached to its instance profile. The prep script creates a <code>CloudLens-SSM-Role</code> and attaches it for you. If the VM already has an IAM role, the script adds the SSM policy to it instead of replacing.</p>
+          </article>
+
+          <article class="card">
+            <h3>📡 SSM Agent</h3>
+            <p><strong>Auto-fix:</strong> Mostly</p>
+            <p>Pre-installed on Amazon Linux, Ubuntu 16.04+, Windows Server 2016+. Must be installed manually on RHEL/CentOS &mdash; commands below.</p>
+          </article>
+
+          <article class="card">
+            <h3>🏷 Tags</h3>
+            <p><strong>Auto-fix:</strong> Yes</p>
+            <p>The script auto-detects each VM's OS and applies <code>cloudlens=true</code> plus the correct <code>Platform</code> tag (<code>linux-docker</code>, <code>linux-podman</code>, or <code>windows</code>).</p>
+          </article>
+        </div>
+
+        <h3 style="margin-top:48px;">Step 1 &mdash; Scan your environment first</h3>
+        <p>Run scan-only mode to see what's missing before changing anything:</p>
+        <pre data-lang="bash"><code>./scripts/prep-targets.sh \
+  --region us-east-1 \
+  --profile customer \
+  --scan-only</code></pre>
+
+        <p>Example output you should expect:</p>
+        <pre data-lang="report"><code>========================================
+TARGET VM READINESS REPORT
+========================================
+Ready for sensor deployment: 12 instances
+Missing tags (cloudlens + Platform):  20 instances
+Missing SSM Agent:                     8 instances
+Missing IAM role:                      7 instances
+Total running instances:              47</code></pre>
+
+        <h3 style="margin-top:48px;">Step 2 &mdash; Auto-fix every issue</h3>
+        <p>Once you've reviewed the scan, run with <code>--auto-fix</code> to remediate every gap in one shot:</p>
+        <pre data-lang="bash"><code>./scripts/prep-targets.sh \
+  --region us-east-1 \
+  --profile customer \
+  --auto-fix</code></pre>
+        <p>This will, in order:</p>
+        <ul>
+          <li>Create the <code>CloudLens-SSM-Role</code> IAM role with SSM + S3 permissions</li>
+          <li>Attach the role to instances that don't have one</li>
+          <li>Add the SSM policy to instances that already have a different IAM role</li>
+          <li>Install SSM Agent on Linux via <strong>EC2 Instance Connect</strong> &mdash; no standing SSH needed</li>
+          <li>Auto-detect each VM's OS and apply the correct <code>Platform</code> tag</li>
+          <li>Tag everything with <code>cloudlens=true</code> for sensor targeting</li>
+        </ul>
+        <p>Omit <code>--auto-fix</code> for <strong>interactive mode</strong> &mdash; the script will prompt before each change.</p>
+
+        <h3 style="margin-top:48px;">Step 3 &mdash; Manual SSM Agent install (when Instance Connect isn't available)</h3>
+        <p>For VMs with no public IP or SGs that block SSH, install SSM Agent in-OS:</p>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;">
+          <article class="card">
+            <h3>Ubuntu / Debian</h3>
+            <pre data-lang="bash"><code>sudo snap install amazon-ssm-agent --classic
+sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service</code></pre>
+          </article>
+
+          <article class="card">
+            <h3>RHEL / CentOS</h3>
+            <pre data-lang="bash"><code>sudo dnf install -y \
+  https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+sudo systemctl enable amazon-ssm-agent
+sudo systemctl start amazon-ssm-agent</code></pre>
+          </article>
+
+          <article class="card">
+            <h3>Windows (PowerShell admin)</h3>
+            <pre data-lang="powershell"><code># SSM Agent is pre-installed on Windows Server 2016+
+# If it's not responding, restart it:
+Restart-Service AmazonSSMAgent</code></pre>
+          </article>
+        </div>
+
+        <div class="callout-warning" style="margin-top:32px;">
+          ⚠ After installing SSM Agent, wait 30&ndash;60 seconds for it to register with AWS Systems Manager. Verify with: <code>aws ssm describe-instance-information --region us-east-1</code>
+        </div>
+
+        <details class="card" style="margin-top:24px;">
+          <summary style="cursor:pointer;font-weight:700;">Remove SSM Agent after sensor deployment (optional)</summary>
+          <div style="padding-top:16px;">
+            <p>Once CloudLens sensors are running, they talk directly to CLMS on port 443 &mdash; SSM Agent is no longer required for operation. We recommend keeping it for future updates, troubleshooting, and bulk removal, but if compliance requires removal:</p>
+            <pre data-lang="bash"><code># Ubuntu / Debian
+sudo snap remove amazon-ssm-agent
+
+# RHEL / CentOS
+sudo dnf remove -y amazon-ssm-agent
+
+# Windows (PowerShell admin)
+msiexec /x {SSM_AGENT_GUID} /quiet</code></pre>
+          </div>
+        </details>
+      </div>
+    </section>
+
     <!-- PHASE 3: SENSOR DEPLOYMENT -->
-    <section id="sensors" class="section alt">
+    <section id="sensors" class="section">
       <div class="container">
         <header class="section-head">
           <h2>Phase 3 &mdash; Sensor Deployment via SSM</h2>
@@ -714,8 +824,89 @@ aws cloudformation wait stack-delete-complete \
       </div>
     </section>
 
+    <!-- APPENDIX -->
+    <section id="appendix" class="section">
+      <div class="container">
+        <header class="section-head">
+          <h2>Appendix &mdash; Reference</h2>
+          <p class="lede">Default credentials, network topology, SSM Command Documents, and the AWS Service Catalog self-service roadmap. Keep this open in a tab during deployment.</p>
+        </header>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;">
+
+          <article class="card">
+            <h3>🔑 Default Credentials</h3>
+            <table class="step-table">
+              <thead><tr><th>Product</th><th>Username</th><th>Password</th></tr></thead>
+              <tbody>
+                <tr><td>KVO</td><td><code>admin</code></td><td><code>admin</code></td></tr>
+                <tr><td>CLMS</td><td><code>admin</code></td><td><code>Cl0udLens@dm!n</code></td></tr>
+                <tr><td>vPB SSH (port 9022)</td><td><code>admin</code></td><td><code>ixia</code></td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:12px;font-size:0.88rem;color:#4A5568;">⚠ Change these on first login. Default passwords are <strong>not</strong> for production.</p>
+          </article>
+
+          <article class="card">
+            <h3>🌐 Network Topology</h3>
+            <table class="step-table">
+              <thead><tr><th>Subnet</th><th>CIDR</th><th>Purpose</th><th>Resources</th></tr></thead>
+              <tbody>
+                <tr><td>Management</td><td><code>10.0.1.0/24</code></td><td>SSH, HTTPS, REST API</td><td>KVO, CLMS, vPB <code>eth0</code></td></tr>
+                <tr><td>Data</td><td><code>10.0.2.0/24</code></td><td>Sensor traffic (GRE / VXLAN)</td><td>vPB <code>eth1</code> (ingress)</td></tr>
+                <tr><td>Tool</td><td><code>10.0.3.0/24</code></td><td>Processed traffic to tools</td><td>vPB <code>eth2</code> (egress)</td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:12px;font-size:0.88rem;color:#4A5568;">CIDRs are configurable in <code>terraform.tfvars</code> and CFT parameters.</p>
+          </article>
+
+          <article class="card">
+            <h3>🛰 AWS Marketplace AMIs</h3>
+            <table class="step-table">
+              <thead><tr><th>Product</th><th>AMI ID</th><th>Instance</th></tr></thead>
+              <tbody>
+                <tr><td>KVO</td><td><code>ami-017c0db8981569380</code></td><td><code>c5.2xlarge</code> only</td></tr>
+                <tr><td>CLMS</td><td><code>ami-0bebd5e730315337e</code></td><td><code>t3.xlarge</code></td></tr>
+                <tr><td>vPB-KVO</td><td><code>ami-0a561b450552b707d</code></td><td><code>t3.xlarge</code> only</td></tr>
+                <tr><td>Collector SVM</td><td><code>ami-0c22ade3667f8d35a</code> v6.13.0</td><td>auto-deployed by KVO</td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:12px;font-size:0.88rem;color:#4A5568;">KVO and vPB-KVO have AWS Marketplace instance-type restrictions &mdash; cannot change.</p>
+          </article>
+
+          <article class="card">
+            <h3>📜 SSM Command Documents</h3>
+            <p>Auto-registered by Terraform/CloudFormation:</p>
+            <table class="step-table">
+              <thead><tr><th>Document Name</th><th>Target</th></tr></thead>
+              <tbody>
+                <tr><td><code>&lt;prefix&gt;-Deploy-CloudLens-Docker</code></td><td>Ubuntu, Debian</td></tr>
+                <tr><td><code>&lt;prefix&gt;-Deploy-CloudLens-Podman</code></td><td>RHEL, CentOS, Amazon Linux 2023</td></tr>
+                <tr><td><code>&lt;prefix&gt;-Deploy-CloudLens-Windows</code></td><td>Windows Server 2016+</td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:12px;font-size:0.88rem;color:#4A5568;">Invoke directly via <code>aws ssm send-command</code> or through the <code>deploy-sensors.sh</code> wrapper.</p>
+          </article>
+
+          <article class="card" style="grid-column:1/-1;">
+            <h3>🛣 Roadmap &mdash; AWS Service Catalog Self-Service</h3>
+            <p>The next milestone packages AutoPilot as an AWS Service Catalog product. Customer-facing flow:</p>
+            <ol style="padding-left:20px;">
+              <li>Customer opens <strong>AWS Console &rsaquo; Service Catalog</strong></li>
+              <li>Selects <strong>"Keysight CloudLens Visibility Stack"</strong></li>
+              <li>Fills parameters (region, instance sizes, key pair)</li>
+              <li>Clicks <strong>Launch</strong> &mdash; infrastructure deploys automatically</li>
+              <li>Follows Phase 2 in this runbook for product configuration</li>
+              <li>Tags target VMs and runs sensor deployment from the included EC2 user-data script</li>
+            </ol>
+            <p>Zero Terraform install on the customer's machine. Fully governed within their own AWS account. Targeted for the Airtel 1,700-site rollout.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <!-- 6. VERIFIED RESULTS -->
-    <section id="verified" class="section">
+    <section id="verified" class="section alt">
       <div class="container">
         <header class="section-head">
           <h2>Verified against real AWS</h2>
