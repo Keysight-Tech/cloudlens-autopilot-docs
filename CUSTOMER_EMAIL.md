@@ -1,46 +1,141 @@
-# Customer Email Template: CloudLens Ansible for Azure
+# Customer Email Templates
 
-> Pre-written email Sales Engineers send to a customer's DevOps / network team
-> after a discovery call. Replace `{{ placeholders }}` and send. No edits
-> required beyond the placeholders.
+Copy-paste templates for SEs sending CloudLens AutoPilot intros, kickoff invites, and follow-ups to customers. All emails are pre-formatted with AWS-correct terminology.
 
 ---
 
-**To:** `{{ customer_team_email }}`
-**Cc:** `{{ se_email }}`, `{{ account_executive_email }}`
-**Subject:** CloudLens sensor deployment: automated kit for your Azure environment
+## Initial introduction (after discovery call)
+
+**Subject:** CloudLens AutoPilot for AWS — next steps for your visibility deployment
+
+> Hi [Customer Name],
+>
+> Following our conversation, here's the next-step package for deploying Keysight CloudLens visibility on your AWS account using our AutoPilot platform.
+>
+> **What AutoPilot delivers:**
+>
+> - Full CloudLens stack (KVO + CLMS + vPB + collector SVMs) deployed via CloudFormation or Terraform — your choice
+> - AWS-native sensor rollout to every tagged EC2 instance via SSM Run Command (no SSH or WinRM access required)
+> - VPC Traffic Mirroring auto-managed by KVO, with sub-second new-instance detection via our EventBridge Lambda
+> - 45-minute typical deployment time (proven at AAA Financial Services with 847 VMs)
+>
+> **Public docs & live site:**
+> https://keysight-tech.github.io/cloudlens-autopilot-docs/
+>
+> **Customer runbook (DOCX):**
+> https://github.com/Keysight-Tech/cloudlens-autopilot-docs/raw/main/CloudLens-AutoPilot-Deployment-Runbook.docx
+>
+> **One-click deploy from your AWS Console:**
+> https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://raw.githubusercontent.com/Keysight-Tech/cloudlens-autopilot-docs/main/cloudlens-autopilot.yaml&stackName=cloudlens-autopilot
+>
+> Before deploying, please subscribe to the 3 Keysight Marketplace products (one-time per AWS account). Direct links are on the public docs page under "AWS Marketplace prerequisites."
+>
+> Want me to walk through deployment live? Reply with a 30-minute slot and I'll bring an engineer.
+>
+> Best,
+> [Your name]
+> Keysight Solutions Engineering
 
 ---
 
-Hi {{ customer_team_name }},
+## Kickoff email (after they sign)
 
-Following our conversation about deploying CloudLens sensors to your Azure VMs, here is the fully automated kit. It is production-tested against real Azure (Linux and Windows) and scales from a single VM to 5,000+ without changing how you invoke it.
+**Subject:** CloudLens AutoPilot deployment kickoff — checklist for [Customer Name]
 
-Everything you need is in one GitHub repo. The runbook PDF attached to this email mirrors the README in a printable, executive-friendly format. Same content, same commands, easier to share internally.
+> Hi [Customer Name],
+>
+> Great news — we're ready to deploy CloudLens on your AWS account. Here's what we need from you to start:
+>
+> **From your side (estimate 1 hour total):**
+>
+> 1. **AWS account access** for a Keysight SE (IAM role with `AdministratorAccess` is easiest; we can scope down later)
+> 2. **Marketplace subscriptions accepted** for the 3 Keysight products in your target AWS account:
+>    - Keysight Vision One
+>    - Keysight CloudLens Manager
+>    - Keysight CloudLens Virtual Packet Broker
+>    (Direct links here: https://keysight-tech.github.io/cloudlens-autopilot-docs/#prereq-deploys)
+> 3. **EC2 key pair** created in the target region (we'll use this for emergency console access; not required for normal ops)
+> 4. **Target VPC topology**: greenfield (we create a new VPC) or brownfield (we deploy into your existing VPC)?
+> 5. **Tagged target instances** — the EC2 instances you want monitored need `cloudlens=true` + a `Platform` tag (`linux-docker`, `linux-podman`, or `windows`). Our `prep-targets.sh` script can auto-tag if needed.
+>
+> **From our side:**
+>
+> 1. SE-led CloudFormation or Terraform deployment (~10 min including waits)
+> 2. KVO/CLMS/vPB EULA acceptance and license activation (~15 min)
+> 3. Sensor rollout via SSM Run Command (5–60 min depending on fleet size — see https://keysight-tech.github.io/cloudlens-autopilot-docs/#scaling)
+> 4. Verification + handoff to your team
+>
+> Shall we schedule the kickoff call? I have these slots available:
+> - [Date / Time options]
+>
+> Best,
+> [Your name]
 
-**There are 3 ways to deploy. Pick whichever fits how your team works:**
+---
 
-- **Tier 1: one-click from the Azure Portal.** Click "Deploy to Azure" in the README. No local tools, no Service Principal, no SSH keys. An ephemeral runner spins up in your subscription, deploys sensors to every tagged VM, and self-destructs after one hour.
-- **Tier 2: Azure Cloud Shell.** If you are already logged into Azure in your browser, run one `curl` command. Cloud Shell is pre-authenticated, so there is nothing to install.
-- **Tier 3: Docker (your laptop or CI/CD).** A pinned container image with Ansible and the Azure collections baked in. Mount your `customer_input.yaml`, pass a Service Principal via env vars, and run. Works identically on macOS, Windows, Linux, GitHub Actions, GitLab CI, and Jenkins.
+## Day-of follow-up (during/after deployment)
 
-**Prerequisites**
+**Subject:** CloudLens AutoPilot deployment — status update
 
-The dynamic inventory discovers VMs by Azure tag, so before you run the kit, tag every target VM with `cloudlens=yes`, `os=ubuntu|rhel|windows`, and `env=prod|dev|qa`. The README has copy/paste `az vm update` loops that bulk-tag an entire resource group in one shot.
+> Hi [Customer Name],
+>
+> Quick status from today's session:
+>
+> ✅ **Phase 1 (Infrastructure)** — CloudFormation stack `cloudlens-autopilot` is in `CREATE_COMPLETE`. KVO, CLMS, vPB instances are up and reachable.
+>
+> ✅ **Phase 2 (Configuration)** — KVO EULA accepted, all 3 licenses activated, CLMS adopted, vPB onboarded via CLI, AWS Cloud Config committed.
+>
+> 🔄 **Phase 3 (Sensors)** — In progress. SSM Run Command is currently deploying to [N] tagged instances. Estimated completion: [time].
+>
+> **Access URLs (private, don't share):**
+> - KVO: https://[kvo-public-ip]/ (admin / admin — please change on first login)
+> - CLMS: https://[clms-public-ip]/ (admin / Cl0udLens@dm!n — please change)
+> - vPB CLI: `ssh -p 9022 admin@[vpb-public-ip]` (default password `ixia`)
+>
+> I'll send a final report once Phase 3 completes with the sensor registration count and CloudWatch dashboard link.
+>
+> Best,
+> [Your name]
 
-**What to expect**
+---
 
-A small environment (under 50 VMs) deploys end-to-end in roughly 8 minutes. A few thousand VMs takes 30–60 minutes, because the playbook auto-tunes Ansible forks based on inventory size and auto-shards above 2,000 VMs. Every sensor self-registers with CLMS on first start, so there are no manual UI steps.
+## Post-deployment summary
 
-**Documentation**
+**Subject:** CloudLens AutoPilot — deployment complete + handoff to your team
 
-- GitHub repo and README: https://github.com/Keysight-Tech/cloudlens-ansible-azure
-- Customer Runbook PDF: attached to this email (also in `docs/` on the repo)
+> Hi [Customer Name],
+>
+> Deployment is complete. Summary:
+>
+> **Final numbers:**
+> - **EC2 instances monitored:** [N] / [N target]
+> - **Sensors registered in CLMS:** [N] / [N target]
+> - **CFT stack:** `cloudlens-autopilot` (CREATE_COMPLETE)
+> - **Auto-Mirror Lambda:** active, tagging new instances within ~1 second
+> - **Total deployment time:** [HH:MM]
+>
+> **What to monitor day-to-day:**
+> - CLMS > Sensors — should stay at 100% Connected
+> - KVO > Cloud Fabric > Monitoring Policies — mirror session count
+> - CloudWatch > VPC Flow Logs — traffic patterns
+>
+> **When to call us:**
+> - Sensor stays Disconnected > 5 minutes
+> - Mirror session count drops unexpectedly
+> - New AWS region rollout
+> - Scaling beyond 5,000 instances
+>
+> **Public docs & troubleshooting:**
+> - Site: https://keysight-tech.github.io/cloudlens-autopilot-docs/
+> - Troubleshooting: https://github.com/Keysight-Tech/cloudlens-autopilot-docs/blob/main/TROUBLESHOOTING.md
+> - Open an issue: https://github.com/Keysight-Tech/cloudlens-autopilot-docs/issues
+>
+> You're in good hands. Reach out any time.
+>
+> Best,
+> [Your name]
+> Keysight Solutions Engineering
 
-**Support**
+---
 
-If anything blocks you, reply to this thread or reach me directly at `{{ se_email }}` / `{{ se_phone }}`. I will jump on a screen-share within one business day.
-
-Thanks,
-{{ se_name }}
-Keysight Technologies
+*Templates updated 2026-06-09 to match runbook v2.0 facts (instance types, default passwords, ports, etc.).*

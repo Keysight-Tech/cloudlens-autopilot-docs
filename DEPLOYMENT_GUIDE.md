@@ -1,168 +1,116 @@
 # Deployment Guide
 
-End-to-end customer deployment in 6 steps.
+🌐 **Interactive walkthrough:** https://keysight-tech.github.io/cloudlens-autopilot-docs/#start-here
 
-## Step 1: Prerequisites
+The full step-by-step runbook is in [`CloudLens-AutoPilot-Deployment-Runbook.docx`](CloudLens-AutoPilot-Deployment-Runbook.docx) (1,462 lines). This file is the executive summary version for SEs and DevOps reviewers.
 
-On your Ansible control machine (laptop or jumpbox):
+## Prerequisites (one-time per AWS account)
 
-```bash
-# Azure CLI
-brew install azure-cli                    # macOS
-# OR: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash    # Ubuntu
-# OR: see https://learn.microsoft.com/cli/azure/install-azure-cli
+1. **Subscribe to AWS Marketplace** for all three Keysight products:
+   - [Keysight Vision One](https://aws.amazon.com/marketplace/search/results?searchTerms=Keysight+Vision+One)
+   - [Keysight CloudLens Manager](https://aws.amazon.com/marketplace/search/results?searchTerms=Keysight+CloudLens+Manager)
+   - [Keysight CloudLens Virtual Packet Broker](https://aws.amazon.com/marketplace/search/results?searchTerms=Keysight+CloudLens+Virtual+Packet+Broker)
+2. **AWS CLI v2** configured with SSO or access keys
+3. **EC2 key pair** created in the target region
+4. **(Terraform path only)** Terraform v1.5+ installed
 
-# Ansible
-pip3 install ansible-core==2.16
+## Path A — CloudFormation (recommended for customers)
 
-# Collections
-ansible-galaxy collection install -r requirements.yml
-```
+### Option 1: One-click via AWS Console
 
-## Step 2: Clone the repo and create a Service Principal
+[**▶ Deploy from AWS Console**](https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://raw.githubusercontent.com/Keysight-Tech/cloudlens-autopilot-docs/main/cloudlens-autopilot.yaml&stackName=cloudlens-autopilot)
 
-```bash
-git clone https://github.com/Keysight-Tech/cloudlens-ansible-azure.git
-cd cloudlens-ansible-azure
+The deeplink pre-loads the CFT from this repo. Fill the parameters (key pair, allowed CIDRs) and click **Create Stack**. ~5 minutes.
 
-./scripts/setup_azure_sp.sh
-# Follow prompts to login, select subscription, create SP
-# Outputs: azure_sp_creds.json (DO NOT COMMIT)
-#          scripts/load_sp_creds.sh (env export helper)
-
-source scripts/load_sp_creds.sh
-```
-
-Verify credentials work:
+### Option 2: AWS CLI
 
 ```bash
-az vm list --query "[].{name:name, rg:resourceGroup, location:location, os:storageProfile.osDisk.osType}" -o table
+aws cloudformation create-stack \
+  --stack-name cloudlens-autopilot \
+  --template-url https://raw.githubusercontent.com/Keysight-Tech/cloudlens-autopilot-docs/main/cloudlens-autopilot.yaml \
+  --parameters \
+    ParameterKey=KeyPairName,ParameterValue=your-key-pair \
+    ParameterKey=AllowedSshCidrs,ParameterValue=your.ip/32 \
+    ParameterKey=AllowedWebCidrs,ParameterValue=your.ip/32 \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+
+aws cloudformation wait stack-create-complete --stack-name cloudlens-autopilot
+
+# Get the URLs
+aws cloudformation describe-stacks --stack-name cloudlens-autopilot \
+  --query "Stacks[0].Outputs" --output table
 ```
 
-## Step 3: Tag your VMs in Azure
-
-Tag the VMs that should receive CloudLens sensors:
-
-| Tag | Required Value |
-|---|---|
-| `cloudlens` | `yes` |
-| `os` | `ubuntu` \| `rhel` \| `windows` |
-| `env` | `prod` (or `dev`/`qa`, must match conditional_groups in `inventory/azure_rm.yaml`) |
-
-Bulk-tag all Linux VMs in a resource group:
+## Path B — Terraform (SE / DevOps)
 
 ```bash
-RG=customer-prod-rg
+git clone https://github.com/Keysight-Tech/cloudlens-autopilot.git
+cd cloudlens-autopilot/terraform/environments/demo
 
-# Ubuntu VMs
-for vm in $(az vm list -g $RG --query "[?storageProfile.imageReference.offer=='UbuntuServer' || storageProfile.imageReference.offer=='0001-com-ubuntu-server-jammy'].name" -o tsv); do
-  az vm update --resource-group $RG --name $vm --set tags.cloudlens=yes tags.os=ubuntu tags.env=prod
-done
+# Generate terraform.tfvars from the live site wizard:
+# https://keysight-tech.github.io/cloudlens-autopilot-docs/#wizard
+# Or copy and edit demo.tfvars.example:
+cp demo.tfvars.example demo.tfvars
+vim demo.tfvars   # set aws_region, prefix, key_pair_name, allowed_*_cidrs
 
-# Windows VMs
-for vm in $(az vm list -g $RG --query "[?storageProfile.osDisk.osType=='Windows'].name" -o tsv); do
-  az vm update --resource-group $RG --name $vm --set tags.cloudlens=yes tags.os=windows tags.env=prod
-done
+terraform init
+terraform apply -var-file=demo.tfvars
+
+terraform output urls    # KVO, CLMS, vPB URLs
 ```
 
-## Step 4: Configure `customer_input.yaml`
+## Phase 2 — Product Configuration (~15 min)
+
+After Phase 1 completes, configure the products via their web UIs:
+
+1. **Accept KVO EULA** — open `https://<kvo-ip>/`, click Agree. _KVO blocks all access including the API until this is done._
+2. **Activate licenses** — KVO > Settings > Product Licensing > Activate (vPB Advanced, CloudLens Enterprise, KVO perpetual)
+3. **Adopt CLMS into KVO** — KVO > Inventory > CloudLens Manager > Discover. Use the CLMS **private** IP (`10.99.1.x` from outputs).
+4. **Onboard vPB to KVO** — SSH to vPB on port 9022, run `configure terminal / kvo / ip <kvo-ip> / port 443 / enable / monitored / end / write memory`. Then adopt in KVO with "Control the adopted device" enabled.
+5. **Create AWS Cloud Config** — KVO > Cloud Fabric > Cloud Configs > New > AWS. Paste IAM keys, pick region + VPC + subnets, commit.
+
+## Phase 3 — Sensor Deployment (~5–60 min depending on fleet size)
 
 ```bash
-cp customer_input.yaml.example customer_input.yaml
+./scripts/deploy-sensors.sh \
+  --region us-east-1 \
+  --profile autopilot \
+  --clms-ip <clms-public-ip> \
+  --project-key <clms-project-key>
 ```
 
-Edit `customer_input.yaml`:
+Sensors are pushed via AWS SSM Run Command — no SSH, no WinRM. Target VMs must have:
+- IAM role with `AmazonSSMManagedInstanceCore` policy
+- SSM Agent running
+- Tags: `cloudlens=true` + `Platform=linux-docker` (or `linux-podman` or `windows`)
 
-```yaml
-azure:
-  subscription_id: "<YOUR_SUB_ID>"
-  tenant_id: "<YOUR_TENANT_ID>"
-  resource_groups:
-    - "customer-prod-rg"
-  locations:
-    - "eastus2"
+Run `./scripts/prep-targets.sh --auto-fix` to remediate any missing prerequisites.
 
-cloudlens:
-  manager_ip_or_fqdn: "20.x.x.x"        # ← from CLMS deployment
-  project_key: "<FROM_CLMS_UI>"          # ← Projects → API Keys
-  custom_tags: "Env=Azure Region=eastus2 Customer=Acme"
+## Verify
 
-linux:
-  ansible_user: "azureuser"
-  ssh_key_file: "~/.ssh/customer-prod.pem"
+In CLMS UI:
+1. Login `admin / Cl0udLens@dm!n`
+2. Go to **Sensors**
+3. Every tagged EC2 instance should be listed as **Connected**
 
-windows:
-  ansible_user: "azureuser"
-```
+In KVO UI:
+1. Login `admin / admin`
+2. Go to **Inventory > Devices** — CLMS + vPB should show **CONNECTED**
+3. Go to **Cloud Fabric > Cloud Configs** — AWS config should show **COMMITTED**
 
-Set the Windows admin password env var (do NOT put it in the yaml):
+## Tear down
 
 ```bash
-export ANSIBLE_WINRM_PASSWORD='YourSecurePassword123!'
+# Remove sensors first
+./scripts/remove-sensors.sh --region us-east-1 --profile autopilot
+
+# Then destroy infrastructure
+aws cloudformation delete-stack --stack-name cloudlens-autopilot --region us-east-1
+# OR
+terraform destroy -var-file=demo.tfvars
 ```
 
-Place the Windows installer in `files/`:
+---
 
-```bash
-cp /path/to/cloudlens-win-sensor-6.12.0.316.exe files/
-```
-
-## Step 5: Dry run
-
-Preview what will happen without making changes:
-
-```bash
-# Show what VMs the dynamic inventory will pick up
-ansible-inventory -i inventory/azure_rm.yaml --graph
-
-# Dry-run the deployment
-ansible-playbook deploy.yaml \
-  -e "@customer_input.yaml" \
-  -i inventory/azure_rm.yaml \
-  --check
-```
-
-## Step 6: Deploy
-
-```bash
-./scripts/deploy.sh
-```
-
-Walks through:
-
-1. Pre-flight checks (CLI tools, env vars, installer presence)
-2. Inventory preview + confirmation prompt
-3. WinRM bootstrap on Windows VMs (~30s per VM)
-4. Sensor deployment in parallel across Ubuntu/RHEL/Windows
-5. Health verification
-6. Final summary with CLMS UI link
-
-Expected output (per Linux VM):
-
-```
-TASK [Verify CloudLens Agent container is running] ******
-ok: [20.85.x.x] => "CloudLens agent container 'cloudlens-agent' is running"
-```
-
-Expected output (per Windows VM):
-
-```
-TASK [Final status] ******
-ok: [20.85.y.y] => "CloudLens Deployment
-                    Service: RUNNING
-                    Process: YES
-                    Registry: PRESENT
-                    Config: EXISTS
-                    Result: SUCCESS"
-```
-
-## Post-Deployment Verification
-
-1. **Log into the CLMS UI.** Sensors should appear within ~60s.
-2. **Filter by your `custom_tags`** to confirm all VMs are listed.
-3. **Send test traffic** from a tagged VM.
-4. **Verify traffic appears in your defined tool or probe.**
-
-## Troubleshooting
-
-If something fails, check `ansible.log` and see `docs/TROUBLESHOOTING.md`.
+*See the [full runbook](CloudLens-AutoPilot-Deployment-Runbook.docx) for every UI click and exact parameter detail. See [SCALING.md](SCALING.md) for fleet-size guidance.*
